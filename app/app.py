@@ -1,6 +1,7 @@
 import streamlit as st
 from ollama import Client
 import chromadb
+from chromadb.utils import embedding_functions
 import requests
 import bs4
 import ollama
@@ -11,6 +12,29 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
+from langchain_community.vectorstores.utils import filter_complex_metadata
+from langchain_text_splitters import CharacterTextSplitter
+import time
+
+
+CHROMA_DATA_PATH = "chroma_data/"
+EMBED_MODEL = "all-MiniLM-L6-v2"
+COLLECTION_NAME = "evidence_source"
+
+
+chroma_client = chromadb.Client()
+
+
+embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
+    model_name=EMBED_MODEL
+)
+
+collection = chroma_client.get_or_create_collection(
+    name=COLLECTION_NAME,
+    embedding_function=embedding_func,
+    metadata={"hnsw:space": "cosine"},
+)
+
 
 
 chrome_options = Options()
@@ -91,11 +115,11 @@ def remove_tags(html):
         data.decompose()
 
     # return data by retrieving the tag content'
-    return ' '.join(soup.stripped_strings)
+    return "".join(soup.stripped_strings)
 def update_session_state(key, value):
     st.session_state[key] = st.session_state[value]
 
-st.text_input("Enter Article Link", key="article_link_input", placeholder="https://www.cato.org/people/colin-grabow...", on_change=update_session_state("article_link", "article_link_input"))
+st.text_input("Enter Article Link", key="article_link_input", placeholder="https://www.cato.org/people/colin-grabow...")
 
 automatic = st.checkbox("Let CitAInator choose evidence automatically from a prompt")
 
@@ -107,14 +131,14 @@ else:
 cite = st.button("Cite", use_container_width=True)
 
 if cite:
-    if st.session_state.article_link != "":
+    if st.session_state.article_link_input != "":
 
-        response = requests.get(st.session_state.article_link)
+        response = requests.get(st.session_state.article_link_input)
 
 
         if response.status_code==200:
             st.toast("Request Successful", icon="✅")
-            driver.get(st.session_state.article_link)
+            driver.get(st.session_state.article_link_input)
 
             WebDriverWait(driver, 10).until(document_complete())
 
@@ -122,7 +146,69 @@ if cite:
 
 
 
-            st.write(remove_tags(html))
+            soup_string = remove_tags(html)
+
+
+            text_splitter = CharacterTextSplitter(".")
+            chunks = text_splitter.create_documents(soup_string)
+            chunks = filter_complex_metadata(chunks)
+
+            st.write(len(chunks))
+            st.write(soup_string)
+            """
+
+            for chunk in chunks:
+                print(chunk)
+                collection.add(
+                    documents=[chunk.page_content],
+                    ids=[f"id{chunks.index(chunk)}"],
+                    metadatas=[{"URL": st.session_state.article_link_input}],
+                )
+            
+            author = collection.query(
+                query_texts="Who is the Author of the Webpage?",
+                n_results=1,
+            )
+
+            organization_name = collection.query(
+                query_texts="What is the name of the Webpage's Organization?",
+                n_results=1,
+            )
+
+            publish_date = collection.query(
+                query_texts="What is the publish date of the Webpage?",
+                n_results=1,
+            )
+
+
+            last_updated_date = collection.query(
+                query_texts="What is the last updated date of the Webpage?",
+                n_results=1,
+            )
+
+            article_title = collection.query(
+                query_texts="What is the title of the Webpage?",
+                n_results=1,
+            )
+
+            url = st.session_state.article_link_input
+
+            evidence = st.session_state.evidence_input
+
+            date_accessed = time.asctime()
+
+
+            citation_prompt = f'''You are an AI debate citation bot. You are given this URL: {url} and the following information about the Webpage: Webpage Author(s): {author}, Webpage Organization Name: {organization_name}, Webpage Publish Date: {publish_date}, Webpage Last Updated: {last_updated_date}, Webpage Title: {article_title}, and evidence: {evidence}. You will return back to the user a json-formmated citation that includes the following:
+            The Author(s) of the Webpage, The Name of the Webpage's Organization, The Webpage's Date Published, The Webpage's Date Last Updated, The Webpage's Author Credentials, The Webpage's Organization Credentials, and the Webpage's Title.
+            Only return the json-citation. Do not include any other text. If one or more of the above information is missing, just return an empty string. Do not return any other text.'''
+
+            ollama_output = client.generate(model=st.session_state.model, prompt=citation_prompt)
+            
+
+            st.write(f"Your Citation: {ollama_output}")
+            """
+
+
 
         else:
             st.toast(f"Request Failed with Status Code: {response.status_code}", icon="❌")
