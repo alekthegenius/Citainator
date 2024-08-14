@@ -1,0 +1,31 @@
+services:
+  ollama:
+    volumes:
+    - ollama-citainator:/root/.ollama
+    - ./entrypoint.sh:/entrypoint.sh
+    container_name: ollama-citainator
+    pull_policy: always
+    tty: true
+    restart: unless-stopped
+    image: ollama/ollama:${OLLAMA_DOCKER_TAG-latest}
+    ports:
+    - "11434:11434"
+  citainator:
+    container_name: citainator
+    build:
+      context: ./app
+      dockerfile: ./Dockerfile
+    ports:
+      - "8501:8501"
+      
+
+    restart: unless-stopped
+
+    develop:
+      watch:
+        - action: sync
+          path: ./app
+          target: ./app
+
+volumes:
+  ollama-citainator: {}
