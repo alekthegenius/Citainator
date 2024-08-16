@@ -12,6 +12,8 @@ services:
     - "11434:11434"
   citainator:
     container_name: citainator
+    env_file:
+      - app/.env
     build:
       context: ./app
       dockerfile: ./Dockerfile

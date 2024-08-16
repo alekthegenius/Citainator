@@ -16,6 +16,11 @@ from langchain_community.vectorstores.utils import filter_complex_metadata
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import time
 from htmldate import find_date
+from dotenv import load_dotenv
+import os
+import ast
+
+load_dotenv()
 
 
 CHROMA_DATA_PATH = "chroma_data/"
@@ -65,11 +70,27 @@ chrome_options.add_argument('--disable-dev-shm-usage')
 chrome_options.add_argument("--enable-javascript")
 driver = webdriver.Chrome(service=chrome_service, options=chrome_options)
 
+duck_driver = webdriver.Chrome(service=chrome_service, options=chrome_options)
+
 st.title("CitAInator")
 st.subheader("Generate STOA Citations With the Power of AI")
 
 client = Client(host="http://host.docker.internal:11434")
 
+
+language_code = 'en'
+search_query = ""
+number_of_results = 1
+headers = {
+  'Authorization': os.getenv("ACCESS_TOKEN"),
+  'User-Agent': 'CitAInator (alekvasek@icloud.com)'
+}
+
+base_url = 'https://api.wikimedia.org/core/v1/wikipedia/'
+endpoint = '/search/page'
+wiki_url = base_url + language_code + endpoint
+
+parameters = {'q': search_query, 'limit': number_of_results}
 
 @st.dialog("Pulling Model")
 def pull_model(model):
@@ -95,8 +116,6 @@ except ollama.ResponseError as e:
     
 
 
-
-
 with st.sidebar:
     with st.form("Model Settings"):
         with st.expander("Model"):
@@ -114,6 +133,9 @@ with st.sidebar:
                     with st.spinner("Pulling models..."):
                         pull_model(model)
                     st.session_state.model = model
+
+
+
 
 class document_complete(object):   
     def __call__(self, driver):
@@ -187,7 +209,7 @@ if cite:
 
 
             
-            author = collection.query(
+            author_chunks = collection.query(
                 query_texts="Who is the author the article was written by?",
                 n_results=3,
             )
@@ -214,11 +236,19 @@ if cite:
 
             date_accessed = time.asctime()
 
-            article_wiki = requests.get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{organization_name}")
+            parameters = {'q': organization_name, 'limit': number_of_results}
+
+            article_wiki = requests.get(wiki_url, headers=headers, params=parameters)
+
+            st.write(article_wiki.json())
+
+            article_excerpt = BeautifulSoup(article_wiki.json()["pages"][0]["excerpt"], "html.parser").get_text()
+
+            st.write(article_excerpt)
 
 
-            citation_prompt = f'''You are an AI debate citation bot. You are given this URL: {url} and the following information about the Webpage: Webpage Author(s): {author["documents"][0]}, Webpage Organization Name: {organization_name}, Webpage Publish Date: {publish_date}, Webpage Last Updated: {last_updated_date}, Wepage Author Credentials: {author["documents"][1]}, Webpage Organization Credentials: {author["documents"][2]}, and Webpage Title: {article_title}. You will return back to the user a json-formmated citation that includes the following:
-            The Author(s) of the Webpage, The Name of the Webpage's Organization, The Webpage's Date Published, The Webpage's Date Last Updated, The Webpage's Author Credentials, The Webpage's Organization Credentials, and the Webpage's Title.
+            citation_prompt = f'''You are an AI debate citation bot. You are given this URL: {url} and the following information about the Webpage: Webpage Author(s): {author_chunks["documents"][0]}, Webpage Organization Name: {organization_name}, Webpage Publish Date: {publish_date}, Webpage Last Updated: {last_updated_date}, and Webpage Title: {article_title}. You will return back to the user a json-formmated citation with the following information:
+            author(s), organization name, date_published, date_last_updated.
             Only return the json-citation. Do not include any other text. If one or more of the above information is missing, just return an empty string. Do not return any other text.'''
 
             ollama_output = client.generate(model=st.session_state.model, prompt=citation_prompt)
@@ -226,6 +256,27 @@ if cite:
             st.write(f"Prompt: {citation_prompt}")
 
             st.write(f"Your Citation: {ollama_output["response"]}")
+
+            author_list = list(dict(ollama_output["response"])["author(s)"])
+
+            author_snippet = []
+
+            for author in author_list:
+                duck_driver.get(f"https://duckduckgo.com/?q={author.replace(' ', '+')}&kl=us-en")
+                WebDriverWait(driver, 10).until(document_complete())
+
+                author_snippet.append(duck_driver.find_elements(By.CLASS_NAME, ".links_deep")[0].find_element(By.CLASS_NAME, ".js-result-snippet").text)
+
+            st.write(author_snippet)
+
+
+            chroma_client.delete_collection(name=COLLECTION_NAME)
+
+            collection = chroma_client.create_collection(
+                name=COLLECTION_NAME,
+                embedding_function=embedding_func,
+                metadata={"hnsw:space": "cosine"},
+            )
 
 
         else:
