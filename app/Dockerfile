@@ -20,6 +20,8 @@ RUN chmod +x /usr/bin/chromedriver-linux64/chromedriver
 COPY requirements.txt ./requirements.txt 
 RUN pip install --no-cache-dir -r requirements.txt
 
+RUN python -m spacy download en_core_web_sm
+
 
 
 EXPOSE 8501

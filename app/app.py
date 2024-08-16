@@ -3,7 +3,7 @@ from ollama import Client
 import chromadb
 from chromadb.utils import embedding_functions
 import requests
-import bs4
+from bs4 import BeautifulSoup
 import ollama
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -13,8 +13,9 @@ from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from langchain_community.vectorstores.utils import filter_complex_metadata
-from langchain_text_splitters import CharacterTextSplitter
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 import time
+from htmldate import find_date
 
 
 CHROMA_DATA_PATH = "chroma_data/"
@@ -29,11 +30,28 @@ embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
     model_name=EMBED_MODEL
 )
 
-collection = chroma_client.get_or_create_collection(
-    name=COLLECTION_NAME,
-    embedding_function=embedding_func,
-    metadata={"hnsw:space": "cosine"},
-)
+
+try:
+    collection = chroma_client.get_collection(name=COLLECTION_NAME)
+
+except:
+    collection = False
+
+if collection != False:
+    chroma_client.delete_collection(name=COLLECTION_NAME)
+
+    collection = chroma_client.create_collection(
+        name=COLLECTION_NAME,
+        embedding_function=embedding_func,
+        metadata={"hnsw:space": "cosine"},
+    )
+else:
+    collection = chroma_client.create_collection(
+        name=COLLECTION_NAME,
+        embedding_function=embedding_func,
+        metadata={"hnsw:space": "cosine"},
+    )
+
 
 
 
@@ -104,18 +122,21 @@ class document_complete(object):
             return driver.execute_script(script) == 'complete'
         except WebDriverException:
             return False
-
+        
+# Function to remove tags
 def remove_tags(html):
 
     # parse html content
-    soup = bs4.BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, "html.parser")
 
     for data in soup(['style', 'script']):
         # Remove tags
         data.decompose()
 
-    # return data by retrieving the tag content'
-    return "".join(soup.stripped_strings)
+    # return data by retrieving the tag content
+    return ' '.join(soup.stripped_strings)
+
+
 def update_session_state(key, value):
     st.session_state[key] = st.session_state[value]
 
@@ -124,9 +145,9 @@ st.text_input("Enter Article Link", key="article_link_input", placeholder="https
 automatic = st.checkbox("Let CitAInator choose evidence automatically from a prompt")
 
 if automatic:
-    st.text_input("Enter Evidence Prompt", value=st.session_state.evidence_prompt, placeholder="Describe what you want the evidence to be..", key="evidence_prompt_input")
+    st.text_area("Enter Evidence Prompt", value=st.session_state.evidence_prompt, placeholder="Describe what you want the evidence to be..", key="evidence_prompt_input")
 else:
-    st.text_input("Enter Evidence", key="evidence_input", placeholder="The evidence you want to use for the citation", value=st.session_state.evidence)
+    st.text_area("Enter Evidence", key="evidence_input", placeholder="The evidence you want to use for the citation", value=st.session_state.evidence)
 
 cite = st.button("Cite", use_container_width=True)
 
@@ -144,52 +165,48 @@ if cite:
 
             html = driver.page_source
 
+            parsed_html = remove_tags(html)
 
+            text_splitter = RecursiveCharacterTextSplitter(
+                        chunk_size=512,
+                        chunk_overlap=20,
+                    )
+            
+            lines = text_splitter.split_text(html)
+        
+            st.write(lines)
+            st.write(len(lines))
 
-            soup_string = remove_tags(html)
-
-
-            text_splitter = CharacterTextSplitter(".")
-            chunks = text_splitter.create_documents(soup_string)
-            chunks = filter_complex_metadata(chunks)
-
-            st.write(len(chunks))
-            st.write(soup_string)
-            """
-
-            for chunk in chunks:
-                print(chunk)
+            for i, line in zip(range(1, len(lines)), lines):
+                # Remove tags
                 collection.add(
-                    documents=[chunk.page_content],
-                    ids=[f"id{chunks.index(chunk)}"],
+                    documents=[line],
+                    ids=[f"id{i}"],
                     metadatas=[{"URL": st.session_state.article_link_input}],
                 )
+
+
             
             author = collection.query(
-                query_texts="Who is the Author of the Webpage?",
-                n_results=1,
+                query_texts="Who is the author the article was written by?",
+                n_results=3,
             )
 
-            organization_name = collection.query(
-                query_texts="What is the name of the Webpage's Organization?",
-                n_results=1,
-            )
+            organization_name = driver.current_url
 
-            publish_date = collection.query(
-                query_texts="What is the publish date of the Webpage?",
-                n_results=1,
-            )
+            organization_name = organization_name.replace("https://" if "https://" in organization_name else "http://","",)
+
+            organization_name = organization_name.replace("www.", "") if "www." in organization_name else organization_name
+            organization_name = organization_name.split("/")[0]
+            organization_name = organization_name.split(".")[0]
 
 
-            last_updated_date = collection.query(
-                query_texts="What is the last updated date of the Webpage?",
-                n_results=1,
-            )
+            publish_date = find_date(html, original_date=True)
 
-            article_title = collection.query(
-                query_texts="What is the title of the Webpage?",
-                n_results=1,
-            )
+
+            last_updated_date = find_date(html, original_date=False)
+
+            article_title = driver.title
 
             url = st.session_state.article_link_input
 
@@ -197,17 +214,18 @@ if cite:
 
             date_accessed = time.asctime()
 
+            article_wiki = requests.get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{organization_name}")
 
-            citation_prompt = f'''You are an AI debate citation bot. You are given this URL: {url} and the following information about the Webpage: Webpage Author(s): {author}, Webpage Organization Name: {organization_name}, Webpage Publish Date: {publish_date}, Webpage Last Updated: {last_updated_date}, Webpage Title: {article_title}, and evidence: {evidence}. You will return back to the user a json-formmated citation that includes the following:
+
+            citation_prompt = f'''You are an AI debate citation bot. You are given this URL: {url} and the following information about the Webpage: Webpage Author(s): {author["documents"][0]}, Webpage Organization Name: {organization_name}, Webpage Publish Date: {publish_date}, Webpage Last Updated: {last_updated_date}, Wepage Author Credentials: {author["documents"][1]}, Webpage Organization Credentials: {author["documents"][2]}, and Webpage Title: {article_title}. You will return back to the user a json-formmated citation that includes the following:
             The Author(s) of the Webpage, The Name of the Webpage's Organization, The Webpage's Date Published, The Webpage's Date Last Updated, The Webpage's Author Credentials, The Webpage's Organization Credentials, and the Webpage's Title.
             Only return the json-citation. Do not include any other text. If one or more of the above information is missing, just return an empty string. Do not return any other text.'''
 
             ollama_output = client.generate(model=st.session_state.model, prompt=citation_prompt)
             
+            st.write(f"Prompt: {citation_prompt}")
 
-            st.write(f"Your Citation: {ollama_output}")
-            """
-
+            st.write(f"Your Citation: {ollama_output["response"]}")
 
 
         else:
