@@ -247,9 +247,9 @@ if cite:
             st.write(article_excerpt)
 
 
-            citation_prompt = f'''You are an AI debate citation bot. You are given this URL: {url} and the following information about the Webpage: Webpage Author(s): {author_chunks["documents"][0]}, Webpage Organization Name: {organization_name}, Webpage Publish Date: {publish_date}, Webpage Last Updated: {last_updated_date}, and Webpage Title: {article_title}. You will return back to the user a json-formmated citation with the following information:
-            author(s), organization name, date_published, date_last_updated.
-            Only return the json-citation. Do not include any other text. If one or more of the above information is missing, just return an empty string. Do not return any other text.'''
+            citation_prompt = f'''You are an AI webpage author finder bot. You are given this URL: {url} and the following information about the Webpage: Webpage Author(s): {author_chunks["documents"][0]}, Webpage Organization Name: {organization_name}, Webpage Publish Date: {publish_date}, Webpage Last Updated: {last_updated_date}, and Webpage Title: {article_title}. You will return back to the user a json-formmated citation with the following keys:
+            authors, organization name, date_published, date_last_updated.
+            Only encolse each value in quotes, e.g. "key": "value". Do not enclose values in brackets. Only return the json-citation. Do not include any other text. If one or more of the above information is missing, just return a string of "No_information". Do not return any other text.'''
 
             ollama_output = client.generate(model=st.session_state.model, prompt=citation_prompt)
             
@@ -257,7 +257,7 @@ if cite:
 
             st.write(f"Your Citation: {ollama_output["response"]}")
 
-            author_list = list(dict(ollama_output["response"])["author(s)"])
+            author_list = ast.literal_eval(ollama_output["response"])["authors"]
 
             author_snippet = []
 
@@ -265,7 +265,7 @@ if cite:
                 duck_driver.get(f"https://duckduckgo.com/?q={author.replace(' ', '+')}&kl=us-en")
                 WebDriverWait(driver, 10).until(document_complete())
 
-                author_snippet.append(duck_driver.find_elements(By.CLASS_NAME, ".links_deep")[0].find_element(By.CLASS_NAME, ".js-result-snippet").text)
+                print(duck_driver.find_elements(By.CSS_SELECTOR, ".links_deep"))
 
             st.write(author_snippet)
 
